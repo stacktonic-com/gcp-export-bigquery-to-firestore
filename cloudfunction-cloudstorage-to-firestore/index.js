@@ -3,6 +3,38 @@
 const admin = require('firebase-admin');
 const {Storage} = require('@google-cloud/storage');
 const split = require('split');
+const { pipeline } = require('stream/promises');
+
+// Upload function
+async function jsontoFirestore(file, firestoreKey, firestoreCollection) {  
+    
+    let keysWritten = 0;
+    
+    return new Promise(resolve => {
+        file.createReadStream()
+        .on('error', error => reject(error))
+        .on('response', (response) => {
+            // connection to GCS opened
+        }).pipe(split())
+        .on('data',  async record => {
+            if (!record || record === "") return;
+                keysWritten++;
+
+                const data = JSON.parse(record);
+                const key = data[firestoreKey].replace(/[/]|\./g, '');
+
+                try {
+                    await admin.firestore().collection(firestoreCollection).doc(key).set(data)
+                } catch(e) {
+                    console.log(`Error setting document:  ${e}`);
+                }
+        })
+        .on('end', () => {
+            console.log(`Successfully written ${keysWritten} keys to Firestore.`);
+        })
+        .on('error', error => reject(error));
+    });
+}    
 
 /**
  * Triggered from a Pub/Sub message.
@@ -37,35 +69,13 @@ exports.loadCloudStorageToFirestore = async(event, context) => {
         const bucket = storage.bucket(bucketName);
         const file = bucket.file(bucketPath);
 
-        let keysWritten = 0;
-
         try {
         
             // TO-DO: Remove old records
 
-            // Read file and send to Redis
-            file.createReadStream()
-                .on('error', error => reject(error))
-                .on('response', (response) => {
-                    // connection to GCS opened
-                }).pipe(split())
-                .on('data',  async record => {
-                    if (!record || record === "") return;
-                        keysWritten++;
+            // Read file and send to Firestore
+            await jsontoFirestore(file, firestoreKey, firestoreCollection);
 
-                        const data = JSON.parse(record);
-                        const key = data[firestoreKey].replace(/[/]|\./g, '');
-
-                        try {
-                            await admin.firestore().collection(firestoreCollection).doc(key).set(data)
-                        } catch(e) {
-                            console.log(`Error setting document:  ${e}`);
-                        }
-                })
-                .on('end', () => {
-                    console.log(`Successfully written ${keysWritten} keys to Firestore.`);
-                })
-                .on('error', error => reject(error));
         
         } catch(e) {
             console.log(`Error importing ${bucketPath} to Firestore: ${e}`);
